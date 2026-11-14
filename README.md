@@ -100,4 +100,6 @@ python .agents/skills/salary-consolidation-maintenance/scripts/package_skill.py
 python .agents/skills/salary-consolidation-maintenance/scripts/package_skill.py --output /临时目录/salary-consolidation-maintenance-skill.zip
 ```
 
+也可在GitHub Actions运行 **Package Maintenance Skill**，仅打包技能并附加到指定已有Release；后续修订应使用新的包名，流程不会覆盖同名资产。
+
 本次仅新增维护技能与文档，不改变v2.0应用二进制。后续发布应用前请先阅读技能中的发布说明，处理现有流水线硬编码版本与旧资产覆盖问题。

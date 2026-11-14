@@ -1,0 +1,45 @@
+name: Package Maintenance Skill
+on:
+  workflow_dispatch:
+    inputs:
+      target_release:
+        description: 'Existing release to receive skill assets; application assets are not replaced'
+        default: 'v2.0'
+        required: true
+      package_name:
+        description: 'New asset name without extension; use a versioned name for later revisions'
+        default: 'salary-consolidation-maintenance-skill'
+        required: true
+permissions:
+  contents: write
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TARGET_RELEASE: ${{ inputs.target_release }}
+      PACKAGE_NAME: ${{ inputs.package_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate and package skill
+        shell: bash
+        run: |
+          if [[ ! "$PACKAGE_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$ ]]; then
+            echo 'Invalid package name'
+            exit 1
+          fi
+          python .agents/skills/salary-consolidation-maintenance/scripts/package_skill.py --output "$RUNNER_TEMP/skill-package/$PACKAGE_NAME.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maintenance-skill
+          path: ${{ runner.temp }}/skill-package/*
+      - name: Attach skill assets without replacing application assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release view "$TARGET_RELEASE" --repo "$GITHUB_REPOSITORY"
+          gh release upload "$TARGET_RELEASE" "$RUNNER_TEMP/skill-package/$PACKAGE_NAME.zip" "$RUNNER_TEMP/skill-package/$PACKAGE_NAME.zip.sha256" --repo "$GITHUB_REPOSITORY"

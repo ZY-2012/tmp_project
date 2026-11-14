@@ -57,3 +57,5 @@ gh run view <失败run-id> --repo ZY-2012/tmp_project --log-failed
 ## 仅提交文档或skill
 
 不需要重打应用、不需要改变应用版本/tag，也不需要跑整套工资业务测试。验证内容与链接后提交相应文件；若交付skill压缩包，可追加独立命名的skill资产，不能覆盖应用ZIP或应用校验文件。说明skill文档基线与应用版本，避免让人误以为应用二进制已更新。
+
+仓库另有`.github/workflows/skill-package.yml`可单独验证并打包本技能，将ZIP及校验值附加到指定已存在Release，不重构建应用、不移动应用tag。后续修订使用新的package_name（如附带技能版本号），流程默认不覆盖同名资产。若直接上传通道无法认证，可使用已授权的Actions身份运行此技能专用流程，不必索取用户令牌。
