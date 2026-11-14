@@ -85,7 +85,7 @@ def test_block_missing_amount_and_preserve_output(tmp_path):
     with pytest.raises(ValueError, match='已阻止输出'):
         consolidate('2026-10',source,out,mapping_path=mp,overwrite=True)
     assert out.read_bytes() == b'original'
-    assert json.loads(out.with_suffix('.issues.json').read_text())['金额缺失数'] == 1
+    assert json.loads(out.with_suffix('.issues.json').read_text(encoding='utf-8'))['金额缺失数'] == 1
 
 
 def test_last_total_and_header_priority(tmp_path):
@@ -125,7 +125,7 @@ def test_zip_and_traversal(tmp_path):
     with zipfile.ZipFile(z,'w') as f:
         f.writestr('folder/a.txt','test')
     extract_archive(z,tmp_path/'out')
-    assert (tmp_path/'out/folder/a.txt').read_text() == 'test'
+    assert (tmp_path/'out/folder/a.txt').read_text(encoding='utf-8') == 'test'
     with zipfile.ZipFile(z,'w') as f:
         f.writestr('../escape','bad')
     with pytest.raises(ValueError,match='不安全'):

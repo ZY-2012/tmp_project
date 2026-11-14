@@ -115,7 +115,7 @@ def test_timestamp_on_locked(tmp_path,monkeypatch):
 def test_preferences_never_save_password(tmp_path):
     p=tmp_path/'prefs.json'
     save_preferences({'base_dir':'示例目录','password':'test-secret','month':'2026-10'},p)
-    assert 'password' not in p.read_text()
+    assert 'password' not in p.read_text(encoding='utf-8')
     assert load_preferences(p)['base_dir']=='示例目录'
     p.write_text('bad json')
     assert load_preferences(p)=={}
@@ -157,6 +157,6 @@ def test_gui_background_job_and_preview(tmp_path,monkeypatch):
         assert len(app.preview.get_children())==1
         assert app.metrics['total'].get()=='88.88'
         assert app.values['password'].get()==''
-        assert 'test-only-not-saved' not in (tmp_path/'prefs.json').read_text()
+        assert 'test-only-not-saved' not in (tmp_path/'prefs.json').read_text(encoding='utf-8')
     finally:
         app.destroy()
