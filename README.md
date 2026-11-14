@@ -79,3 +79,25 @@ GitHub Actions → **Windows EXE Release** → **Run workflow** 可重新构建�
 python -m pip install pyinstaller==6.20.0
 python -m PyInstaller --noconfirm --clean --onefile --windowed --name SalaryConsolidator-v2.0 --collect-all msoffcrypto app.py
 ```
+
+
+## 后续功能迭代用 Skill
+
+已整理本项目专用的 [salary-consolidation-maintenance 技能](.agents/skills/salary-consolidation-maintenance/SKILL.md)，涵盖业务规则、开发定位、原版对照、验证矩阵、Windows发布和变更记录模板。
+
+- 本仓库已放在 `.agents/skills/salary-consolidation-maintenance/`；支持该目录发现规则的Codex环境可在重新打开项目或刷新技能后使用。
+- 也可下载 [独立技能ZIP](https://github.com/ZY-2012/tmp_project/releases/download/v2.0/salary-consolidation-maintenance-skill.zip)，把整个文件夹放到其他项目的 `.agents/skills/` 下。其他AI可直接读取其中的SKILL.md及references；这不等于已向所有客户端自动安装技能。
+- 技能仅包含维护知识、参考文件和打包脚本，不含工资样本、映射、密码、原工具或应用EXE。应用历史基线为v2.0，后续以实际源码与发布记录为准。
+
+后续可这样提需求：
+
+> 使用 salary-consolidation-maintenance，新增按出纳筛选预览，Excel输出保持七列。完成测试后提交GitHub并发布新版本。
+
+技能结构检查与独立打包（仓库根目录）：
+
+```sh
+python .agents/skills/salary-consolidation-maintenance/scripts/package_skill.py
+python .agents/skills/salary-consolidation-maintenance/scripts/package_skill.py --output /临时目录/salary-consolidation-maintenance-skill.zip
+```
+
+本次仅新增维护技能与文档，不改变v2.0应用二进制。后续发布应用前请先阅读技能中的发布说明，处理现有流水线硬编码版本与旧资产覆盖问题。
