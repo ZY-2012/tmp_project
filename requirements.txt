@@ -1,0 +1,4 @@
+openpyxl==3.1.5
+msoffcrypto-tool==6.1.0
+xlrd==2.0.2
+rarfile==4.5
