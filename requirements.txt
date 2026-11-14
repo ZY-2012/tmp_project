@@ -1,4 +1,5 @@
 openpyxl==3.1.5
-msoffcrypto-tool==6.1.0
+msoffcrypto-tool==6.0.0; python_version < "3.11"
+msoffcrypto-tool==6.1.0; python_version >= "3.11"
 xlrd==2.0.2
 rarfile==4.5

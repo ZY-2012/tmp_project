@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import shutil
+from datetime import datetime
 import zipfile
 
 import msoffcrypto
@@ -59,7 +61,7 @@ def money(value):
     if value is None or value == '' or isinstance(value, bool):
         return None
     try:
-        number = Decimal(str(value).replace(',', '').replace('，', '').strip())
+        number = Decimal(re.sub(r'[,，¥￥$\s\u3000\xa0]', '', str(value)))
         return number if number.is_finite() else None
     except InvalidOperation:
         return None
@@ -129,11 +131,12 @@ def read_mapping(path):
             book.close()
     if not rows:
         raise ValueError('映射表为空')
-    headers = {str(v).strip(): i for i, v in enumerate(rows[0]) if v is not None}
-    if '工作簿' not in headers:
-        raise ValueError('映射表缺少“工作簿”列')
+    header_index = next((i for i, row in enumerate(rows[:15]) if any(normalize_header(v) == '工作簿' for v in row)), None)
+    if header_index is None:
+        raise ValueError('映射表前15行缺少“工作簿”列')
+    headers = {normalize_header(v): i for i, v in enumerate(rows[header_index]) if v is not None}
     mapping = {}
-    for row in rows[1:]:
+    for row in rows[header_index + 1:]:
         def at(name):
             i = headers.get(name)
             return row[i] if i is not None and i < len(row) else None
@@ -146,7 +149,68 @@ def read_mapping(path):
 def source_files(source, mapping_path=None, output_path=None):
     excluded = {Path(p).resolve() for p in (mapping_path, output_path) if p}
     return sorted((p for p in Path(source).rglob('*') if p.is_file() and p.suffix.lower() == '.xlsx'
-                   and not p.name.startswith(('~$', '集团工资汇总')) and p.resolve() not in excluded), key=lambda p: str(p))
+                   and not p.name.startswith(('~$', '集团工资汇总', '基础信息映射', '映射表')) and p.resolve() not in excluded), key=lambda p: str(p))
+
+
+def normalize_workbook_key(value):
+    text = re.sub(r'\.xlsx?$', '', str(value).strip(), flags=re.IGNORECASE)
+    text = re.sub(r'\s+', '', text)
+    return re.sub(r'[—－–―]', '-', text.replace('（', '(').replace('）', ')')).casefold()
+
+
+def match_mapping(filename, mapping):
+    # 严格包含优先；仅无严格匹配时做名称归一化，和原工具一致。
+    matches = [(key, info) for key, info in mapping if key in filename]
+    if matches:
+        return max(matches, key=lambda pair: len(pair[0]))[1]
+    target = normalize_workbook_key(filename)
+    matches = [(normalize_workbook_key(key), info) for key, info in mapping
+               if normalize_workbook_key(key) and normalize_workbook_key(key) in target]
+    return max(matches, key=lambda pair: len(pair[0]))[1] if matches else None
+
+
+def resolve_month_folder(base, year, month):
+    base = Path(base)
+    if not base.is_dir():
+        raise FileNotFoundError(f'工资根目录不存在：{base}')
+    exact = base / f'{year}年{month}月工资表'
+    if exact.is_dir():
+        return exact
+    markers = [f'{year}年{month}月', f'{year}年{month:02d}月', f'{year}-{month:02d}']
+    candidates = sorted(p for p in base.iterdir() if p.is_dir() and any(marker in p.name for marker in markers))
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        raise ValueError('找到多个当月目录，请直接选择源目录')
+    if source_files(base) and any(p.suffix.lower() == '.xlsx' and not p.name.startswith(('~$', '集团工资汇总', '基础信息映射', '映射表')) for p in base.iterdir() if p.is_file()):
+        return base
+    if any(p.is_file() and p.suffix.lower() in ('.zip', '.rar') for p in base.iterdir()):
+        return base
+    # 允许直接选择“当月目录”，其中源表放在任意层子目录。
+    if any(marker in base.name for marker in markers) and source_files(base):
+        return base
+    raise FileNotFoundError(f'未找到{year}年{month}月工资表；请直接选择当月目录或压缩包')
+
+
+def resolve_mapping_file(explicit=None, directories=()):
+    if explicit:
+        path = Path(explicit)
+        if not path.is_file():
+            raise FileNotFoundError(f'指定映射表不存在：{path}')
+        return path
+    roots = list(dict.fromkeys(Path(p).resolve() for p in directories if p))
+    for root in roots:
+        for name in ('基础信息映射表格.xls', '基础信息映射表格.xlsx'):
+            if (root / name).is_file():
+                return root / name
+    candidates = sorted({p for root in roots if root.is_dir() for p in root.iterdir()
+                         if p.is_file() and p.suffix.lower() in ('.xls', '.xlsx')
+                         and not p.name.startswith('~$') and ('映射' in p.name or '基础信息' in p.name)})
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        raise ValueError('发现多个候选映射表，请明确选择其中一份')
+    return None
 
 
 def inspect_sources(files, mapping, password='', amount_field='实发工资', progress=None):
@@ -167,10 +231,12 @@ def inspect_sources(files, mapping, password='', amount_field='实发工资', pr
                     amount, row_index, fallback = parse_summary(book[name], amount_field)
                     row = {c: None for c in COLUMNS}
                     row.update({'工作簿': path.name, '金额': amount, '工作表': name, '源合计行': row_index})
-                    match = next((values for key, values in mapping if key in path.name), None)
+                    match = match_mapping(path.name, mapping)
                     if match is not None:
                         row.update(match)
                         result.matched += 1
+                        if not any(key in path.name for key, _ in mapping):
+                            issue('提示', path, name, '通过名称归一化匹配付款信息（可能忽略扩展名/项目后缀），请人工复核')
                     else:
                         issue('提示', path, name, '未匹配付款信息，请补充映射表')
                     if amount is None:
@@ -264,7 +330,23 @@ def get_password():
     return ''
 
 
-def extract_archive(path, destination):
+def configure_rar_tools():
+    import rarfile
+    # 安装在默认位置的WinRAR/7-Zip无需手动配置PATH；Windows自带tar为后备。
+    roots = [Path(os.environ.get(key, fallback)) for key, fallback in
+             [('ProgramFiles', r'C:\Program Files'), ('ProgramFiles(x86)', r'C:\Program Files (x86)')]]
+    for attribute, relative in [('UNRAR_TOOL', 'WinRAR/UnRAR.exe'), ('SEVENZIP_TOOL', '7-Zip/7z.exe')]:
+        if not shutil.which(getattr(rarfile, attribute)):
+            found = next((root / relative for root in roots if (root / relative).is_file()), None)
+            if found:
+                setattr(rarfile, attribute, str(found))
+    if os.name == 'nt':
+        tar = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/tar.exe'
+        if tar.is_file():
+            rarfile.BSDTAR_TOOL = str(tar)
+
+
+def extract_archive(path, destination, password=None):
     """仅提取普通文件，禁止路径穿越/链接；RAR依赖系统解压后端。"""
     path, destination = Path(path), Path(destination).resolve()
     if path.suffix.lower() == '.zip':
@@ -272,7 +354,10 @@ def extract_archive(path, destination):
         entries = [(i.filename, i.is_dir(), (i.external_attr >> 16) & 0o170000 == 0o120000, i.file_size, i) for i in archive.infolist()]
     elif path.suffix.lower() == '.rar':
         import rarfile
+        configure_rar_tools()
         archive = rarfile.RarFile(path)
+        if password:
+            archive.setpassword(password)
         entries = [(i.filename, i.isdir(), i.is_symlink(), i.file_size, i) for i in archive.infolist()]
     else:
         raise ValueError('仅支持ZIP或RAR压缩包')
@@ -290,7 +375,7 @@ def extract_archive(path, destination):
                 target.mkdir(parents=True, exist_ok=True)
             else:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(entry) as src, target.open('wb') as dst:
+                with archive.open(entry, pwd=password.encode('utf-8') if password and path.suffix.lower() == '.zip' else password) as src, target.open('wb') as dst:
                     import shutil
                     shutil.copyfileobj(src, dst)
     finally:
@@ -298,36 +383,77 @@ def extract_archive(path, destination):
 
 
 def consolidate(month, input_dir=None, output_path=None, amount_field='实发工资', mapping_path=None,
-                base_dir='.', password=None, overwrite=False, allow_partial=False, progress=None):
+                base_dir='.', password=None, overwrite=False, allow_partial=False, progress=None,
+                on_locked='error', log=None):
     year, mon = parse_month(month)
+    if amount_field not in ('实发工资', '应发工资'):
+        raise ValueError('金额口径仅支持实发工资或应发工资')
+    notify = log or (lambda text: None)
     base = Path(base_dir)
-    source = Path(input_dir) if input_dir else base / f'{year}年{mon}月工资表'
+    source = Path(input_dir) if input_dir else resolve_month_folder(base, year, mon)
     if not source.exists():
         raise FileNotFoundError(f'源目录或压缩包不存在：{source}')
-    mapping = Path(mapping_path) if mapping_path else base / '基础信息映射表格.xls'
-    master = read_mapping(mapping)
     folder = source.parent if source.is_file() or '发放工资表' in source.name or 'to胡经理' in source.name else source
+    mapping = resolve_mapping_file(mapping_path, [base, source if source.is_dir() else source.parent, folder, folder.parent])
+    master = read_mapping(mapping) if mapping else []
+    notify(f'月份：{year}-{mon:02d} | 输入：{source}')
+    notify(f'映射表：{mapping}' if mapping else '未找到映射表，付款信息将留空，请在结果中核对。')
     output = Path(output_path) if output_path else folder / f'集团工资汇总_{year}-{mon:02d}.xlsx'
+    if output.suffix.lower() != '.xlsx':
+        raise ValueError('输出文件必须使用.xlsx扩展名')
+    if output.resolve() == (mapping.resolve() if mapping else None):
+        raise ValueError('输出路径不能覆盖映射表')
+    if output.exists() and not overwrite:
+        raise FileExistsError(f'成品已存在：{output}；请选择新路径或勾选允许覆盖')
+    if output.exists() and source.is_file() and output.resolve() == source.resolve():
+        raise ValueError('输出路径不能覆盖输入文件')
+    if output.exists() and source.is_dir() and output.resolve().is_relative_to(source.resolve()) and not output.name.startswith('集团工资汇总'):
+        existing = None
+        try:
+            existing = openpyxl.load_workbook(output, read_only=True, data_only=True)
+            is_report = existing.sheetnames == ['报告'] and [existing.active.cell(4, c).value for c in range(2, 9)] == COLUMNS
+        except Exception:
+            is_report = False
+        finally:
+            if existing is not None:
+                existing.close()
+        if not is_report:
+            raise ValueError('输出路径指向源目录中的非汇总文件，已阻止覆盖')
+    pw = get_password() if password is None else password
     with tempfile.TemporaryDirectory(prefix='salary-') as temp:
         if source.is_file():
-            extract_archive(source, temp)
+            notify('正在临时解压压缩包…')
+            extract_archive(source, temp, pw or None)
             files = source_files(temp, mapping, output)
         else:
             files = source_files(source, mapping, output)
             if not files:
                 archives = sorted(p for p in source.rglob('*') if p.suffix.lower() in ('.rar', '.zip'))
                 for index, archive in enumerate(archives):
-                    extract_archive(archive, Path(temp) / str(index))
+                    notify(f'正在临时解压：{archive.name}')
+                    extract_archive(archive, Path(temp) / str(index), pw or None)
                 files = source_files(temp, mapping, output)
         if not files:
             raise ValueError('未找到源xlsx文件（已排除旧汇总、映射表、临时文件）')
-        result = inspect_sources(files, master, get_password() if password is None else password, amount_field, progress)
+        if output.resolve() in {f.resolve() for f in files}:
+            raise ValueError('输出路径不能覆盖源工资表')
+        result = inspect_sources(files, master, pw, amount_field, progress)
     output.parent.mkdir(parents=True, exist_ok=True)
-    diagnostic = output.with_suffix('.issues.json')
-    write_issues(result, diagnostic)
     if not result.complete and not allow_partial:
+        diagnostic = output.with_suffix('.issues.json')
+        write_issues(result, diagnostic)
         raise ValueError(f'存在读取错误或金额缺失，已阻止输出；详情见 {diagnostic}')
-    write_report(result, output, overwrite)
+    try:
+        write_report(result, output, overwrite)
+    except PermissionError:
+        if on_locked != 'timestamp':
+            raise PermissionError('无法写入成品，请关闭Excel中的目标文件或更换输出目录') from None
+        stamp = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
+        output = output.with_name(f'{output.stem}_{stamp}{output.suffix}')
+        notify(f'原目标文件无法写入，已使用新文件名：{output.name}')
+        write_report(result, output, overwrite=False)
+    write_issues(result, output.with_suffix('.issues.json'))
+    notify(f'完成：源文件{result.files}个 / 汇总{len(result.rows)}行 / 金额缺失{result.missing_amounts}行')
     return result, output
 
 
@@ -339,12 +465,13 @@ def main():
     parser.add_argument('--mapping')
     parser.add_argument('--base-dir', default='.')
     parser.add_argument('--amount-field', choices=['实发工资', '应发工资'], default='实发工资')
+    parser.add_argument('--on-locked', choices=['error', 'timestamp'], default='error')
     parser.add_argument('--overwrite', action='store_true')
     parser.add_argument('--allow-partial', action='store_true', help='明确允许生成不完整报告')
     args = parser.parse_args()
     try:
         result, output = consolidate(args.month, args.input, args.output, args.amount_field, args.mapping,
-                                     args.base_dir, overwrite=args.overwrite, allow_partial=args.allow_partial)
+                                     args.base_dir, overwrite=args.overwrite, allow_partial=args.allow_partial, on_locked=args.on_locked)
         print(f'已保存：{output}\n文件 {result.files} | 汇总行 {len(result.rows)} | 合计 {result.total} | 映射 {result.matched}/{len(result.rows)}')
         print(f'异常/提示 {len(result.issues)} 条；详见同名 .issues.json')
     except Exception as error:
